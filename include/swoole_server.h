@@ -454,9 +454,13 @@ class ThreadFactory : public BaseFactory {
     std::mutex lock_;
     std::condition_variable cv_;
     std::queue<Worker *> queue_;
+    long cv_timeout_ms_;
+    bool reload_all_workers;
+    bool reloading;
     Worker manager;
     template <typename _Callable>
     void create_thread(int i, _Callable fn);
+    void join_thread(std::thread &thread);
     void at_thread_exit(Worker *worker);
     void create_message_bus();
     void destroy_message_bus();
@@ -469,6 +473,7 @@ class ThreadFactory : public BaseFactory {
     void spawn_user_worker(WorkerId i);
     void spawn_manager_thread(WorkerId i);
     void wait();
+    bool reload(bool reload_all_workers);
     bool start() override;
     bool shutdown() override;
 };
@@ -1388,7 +1393,7 @@ class Server {
     bool send_pipe_message(WorkerId worker_id, EventData *msg);
 
     void init_reactor(Reactor *reactor);
-    void init_worker(Worker *worker);
+    void init_event_worker(Worker *worker);
     void init_task_workers();
     void init_port_protocol(ListenPort *port);
     void init_signal_handler();
@@ -1463,6 +1468,7 @@ class Server {
     static void read_worker_message(ProcessPool *pool, EventData *msg);
 
     void drain_worker_pipe();
+    void clean_worker_connections(Worker *worker);
 
     /**
      * [Worker]
@@ -1472,7 +1478,10 @@ class Server {
     void worker_accept_event(DataHead *info);
     void worker_signal_init(void);
     bool worker_is_running();
+
     std::function<void(const WorkerFn &fn)> worker_thread_start;
+    std::function<void(pthread_t ptid)> worker_thread_join;
+    std::function<int(pthread_t ptid)> worker_thread_get_exit_status;
 
     /**
      * [Master]
@@ -1483,8 +1492,8 @@ class Server {
     bool signal_handler_read_message();
     bool signal_handler_reopen_logger();
 
-    static int worker_main_loop(ProcessPool *pool, Worker *worker);
     static void worker_signal_handler(int signo);
+    static int reactor_process_main_loop(ProcessPool *pool, Worker *worker);
     static void reactor_thread_main_loop(Server *serv, int reactor_id);
     static bool task_pack(EventData *task, const void *data, size_t data_len);
     static bool task_unpack(EventData *task, String *buffer, PacketPtr *packet);
@@ -1525,6 +1534,7 @@ class Server {
     int start_reactor_processes();
     int start_worker_threads();
     void stop_worker_threads();
+    bool reload_worker_threads(bool reload_all_workers);
     void join_reactor_thread();
     TimerCallback get_timeout_callback(ListenPort *port, Reactor *reactor, Connection *conn);
 

@@ -100,12 +100,10 @@ void php_swoole_server_rshutdown() {
     serv->drain_worker_pipe();
 
     if (serv->is_started() && serv->worker_is_running() && !serv->is_user_worker()) {
-        SwooleWG.shutdown = true;
-#ifdef SW_THREAD
-        if (serv->is_thread_mode()) {
-            serv->abort_worker(sw_worker());
+        sw_worker()->shutdown();
+        if (serv->is_event_worker()) {
+            serv->clean_worker_connections(sw_worker());
         }
-#endif
         if (php_swoole_is_fatal_error()) {
             swoole_error_log(SW_LOG_ERROR,
                              SW_ERROR_PHP_FATAL_ERROR,
@@ -2664,6 +2662,12 @@ static PHP_METHOD(swoole_server, start) {
             }
             php_swoole_thread_start(bootstrap_copy, thread_argv);
         };
+
+        serv->worker_thread_get_exit_status = [](pthread_t ptid) -> int {
+            return php_swoole_thread_get_exit_status(ptid);
+        };
+
+        serv->worker_thread_join = [](pthread_t ptid) { php_swoole_thread_join(ptid); };
     }
 #endif
 
@@ -2960,24 +2964,15 @@ static PHP_METHOD(swoole_server, reload) {
         php_swoole_fatal_error(E_WARNING, "server is not running");
         RETURN_FALSE;
     }
-    if (serv->get_manager_pid() == 0) {
-        php_swoole_fatal_error(E_WARNING, "not supported with single process mode");
-        RETURN_FALSE;
-    }
 
-    zend_bool only_reload_taskworker = 0;
+    zend_bool only_reload_task_workers = 0;
 
     ZEND_PARSE_PARAMETERS_START(0, 1)
     Z_PARAM_OPTIONAL
-    Z_PARAM_BOOL(only_reload_taskworker)
+    Z_PARAM_BOOL(only_reload_task_workers)
     ZEND_PARSE_PARAMETERS_END_EX(RETURN_FALSE);
 
-    int signo = only_reload_taskworker ? SIGUSR2 : SIGUSR1;
-    if (swoole_kill(serv->gs->manager_pid, signo) < 0) {
-        php_swoole_sys_error(E_WARNING, "failed to send the reload signal");
-        RETURN_FALSE;
-    }
-    RETURN_TRUE;
+    RETURN_BOOL(serv->reload(!only_reload_task_workers));
 }
 
 static PHP_METHOD(swoole_server, heartbeat) {
